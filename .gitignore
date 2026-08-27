@@ -1,0 +1,17 @@
+target/
+*.class
+*.jar
+!**/lib/*.jar
+.env
+.idea/
+*.iml
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.venv/
+*.log
+.secrets/
+*-key.json
+cp.txt
+.claude/

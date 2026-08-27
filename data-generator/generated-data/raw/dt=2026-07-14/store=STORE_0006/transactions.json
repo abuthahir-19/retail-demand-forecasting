@@ -1,0 +1,13 @@
+{"transactionId": "6bdcc77a-6ddf-49ef-b0f2-957e677434cd", "storeId": "STORE_0006", "sku": "SKU_0002", "category": "Dairy", "quantity": 2, "unitPrice": 5.52, "timestamp": "2026-07-14T13:31:56+00:00"}
+{"transactionId": "374f65ca-8c92-41bf-be62-86ff70b82e8f", "storeId": "STORE_0006", "sku": "SKU_0014", "category": "Household", "quantity": 1, "unitPrice": 8.72, "timestamp": "2026-07-14T17:27:24+00:00"}
+{"transactionId": "a4c52eff-e36b-4833-9efc-94b5a4699e89", "storeId": "STORE_0006", "sku": "SKU_0017", "category": "Household", "quantity": 1, "unitPrice": 9.1, "timestamp": "2026-07-14T11:30:56+00:00"}
+{"transactionId": "524bf783-0997-4393-922b-e1e89efb67be", "storeId": "STORE_0006", "sku": "SKU_0001", "category": "Beverages", "quantity": 2, "unitPrice": 3.4, "timestamp": "2026-07-14T18:09:56+00:00"}
+{"transactionId": "8ce4ef89-70e9-4c2f-9e0d-f7de5620398e", "storeId": "STORE_0006", "sku": "SKU_0010", "category": "Dairy", "quantity": 1, "unitPrice": 5.7, "timestamp": "2026-07-14T09:55:14+00:00"}
+{"transactionId": "4daa9aea-932c-4958-85aa-0805089b2b03", "storeId": "STORE_0006", "sku": "SKU_0015", "category": "Apparel", "quantity": 1, "unitPrice": 24.13, "timestamp": "2026-07-14T11:02:12+00:00"}
+{"transactionId": "50608e3f-a9d1-46b1-a7a9-0f48e90425e6", "storeId": "STORE_0006", "sku": "SKU_0016", "category": "Snacks", "quantity": 1, "unitPrice": 4.17, "timestamp": "2026-07-14T15:18:36+00:00"}
+{"transactionId": "c37810bf-bb58-4388-a93b-00e754e63c05", "storeId": "STORE_0006", "sku": "SKU_0019", "category": "Dairy", "quantity": 1, "unitPrice": 5.12, "timestamp": "2026-07-14T16:03:53+00:00"}
+{"transactionId": "3dc329b1-cb00-4d7f-abd4-40ce47d22eaf", "storeId": "STORE_0006", "sku": "SKU_0006", "category": "Household", "quantity": 1, "unitPrice": 8.7, "timestamp": "2026-07-14T18:00:50+00:00"}
+{"transactionId": "24ad2284-fd00-4351-9fc5-89c6290daf55", "storeId": "STORE_0006", "sku": "SKU_0007", "category": "Household", "quantity": 1, "unitPrice": 9.42, "timestamp": "2026-07-14T13:53:17+00:00"}
+{"transactionId": "0854ecb9-5a5e-4883-b857-4a9762d665c3", "storeId": "STORE_0006", "sku": "SKU_0007", "category": "Household", "quantity": 1, "unitPrice": 9.39, "timestamp": "2026-07-14T18:15:06+00:00"}
+{"transactionId": "b38c4bc7-f840-44c0-8c62-2ab9c44903f9", "storeId": "STORE_0006", "sku": "SKU_0018", "category": "Beverages", "quantity": 3, "unitPrice": 4.05, "timestamp": "2026-07-14T14:33:13+00:00"}
+{"transactionId": "291b05e6-9bf3-4b66-9454-b15aa2a9996f", "storeId": "STORE_0006", "sku": "SKU_0018", "category": "Beverages", "quantity": 2, "unitPrice": 4.05, "timestamp": "2026-07-14T16:08:47+00:00"}

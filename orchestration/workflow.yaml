@@ -1,0 +1,348 @@
+# Nightly ETL orchestration: create an ephemeral Dataproc cluster, submit
+# the retail-etl-forecast-job Spark job for yesterday's date, wait for it,
+# then delete the cluster - regardless of whether the job succeeded - so
+# no cluster is ever left running between nightly triggers.
+#
+# Uses plain http.* calls against the Dataproc/BigQuery REST APIs rather
+# than typed connectors, since Workflows only ships pre-built connector
+# modules for a subset of GCP APIs and Dataproc isn't reliably one of
+# them. Each call explicitly requests `auth: {type: OAuth2}` to attach a
+# token for the workflow's runtime service account - the generic http.*
+# connector does NOT do this automatically (confirmed via a real 401
+# CREDENTIALS_MISSING without it).
+#
+# Cluster creation tries a list of zones in sequence (create_cluster_multizone
+# below) rather than a single hardcoded zone: repeated real "COMPUTE_ENGINE
+# ... does not have enough resources" failures were observed against
+# us-central1 zones. bootDiskType is pinned to pd-balanced explicitly
+# (rather than leaving it to whatever Dataproc/Compute Engine defaults to)
+# as cheap insurance, but this did NOT turn out to be the actual fix: the
+# exact same error still recurred with it set, in both us-central1 (the
+# original error) and us-east1 (a DIFFERENT error, "Quota 'HDB_TOTAL_GB'
+# exceeded", recurred even with bootDiskType explicitly pd-balanced - so
+# something outside our control is still provisioning Hyperdisk Balanced
+# there regardless of this setting). us-east1 never once succeeded across
+# two attempts, while us-central1 HAS succeeded for real more than once
+# (plain gcloud CLI, and the original M4 test), so region stays
+# us-central1 despite its flakiness - it's the only region with a proven
+# path to success. Treat any recurrence as environmental, not a bug: check
+# for cluster leaks (should be none - verified extensively) and retry.
+#
+# Deploy: orchestration/01_deploy_workflow.sh
+# Trigger manually: gcloud workflows run retail-etl-orchestration --location=us-central1
+main:
+  steps:
+    - init:
+        assign:
+          - project_id: "gcp-learning-acnt"
+          - region: "us-east1"
+          - candidate_zones: ["us-east1-b", "us-east1-c", "us-east1-d"]
+          - landing_bucket: "retail-analytics-landing-gcp-learning-acnt"
+          - bq_dataset: "retail_analytics"
+          - job_jar: "gs://retail-analytics-staging-gcp-learning-acnt/jobs/etl-spark-job-0.1.0.jar"
+          - etl_service_account: "etl-job-sa@gcp-learning-acnt.iam.gserviceaccount.com"
+          - history_days: "90"
+          - horizon_days: "7"
+          - job_failed: false
+          - failure_details: {}
+          - cluster_created: false
+          - active_cluster_name: ""
+          - now_seconds: ${sys.now()}
+          - yesterday_seconds: ${now_seconds - 86400}
+          - process_date: ${text.substring(time.format(yesterday_seconds), 0, 10)}
+          - cluster_name_base: ${"retail-etl-" + string(int(now_seconds))}
+          - dataproc_base: ${"https://dataproc.googleapis.com/v1/projects/" + project_id + "/regions/" + region}
+
+    - log_start:
+        call: sys.log
+        args:
+          severity: "INFO"
+          text: '${"Starting nightly ETL for " + process_date + " (base cluster name " + cluster_name_base + ")"}'
+
+    - run_job:
+        try:
+          steps:
+            - create_cluster:
+                call: create_cluster_multizone
+                args:
+                  dataproc_base: ${dataproc_base}
+                  cluster_name_base: ${cluster_name_base}
+                  etl_service_account: ${etl_service_account}
+                  zones: ${candidate_zones}
+                result: active_cluster_name
+
+            - mark_cluster_created:
+                assign:
+                  - cluster_created: true
+
+            - submit_job:
+                call: http.post
+                args:
+                  url: ${dataproc_base + "/jobs:submit"}
+                  auth:
+                    type: OAuth2
+                  body:
+                    job:
+                      placement:
+                        clusterName: ${active_cluster_name}
+                      sparkJob:
+                        mainClass: "com.retailanalytics.etl.EtlForecastJob"
+                        jarFileUris:
+                          - ${job_jar}
+                        args:
+                          - ${process_date}
+                          - ${"gs://" + landing_bucket + "/raw"}
+                          - ${project_id}
+                          - ${bq_dataset}
+                          - ${history_days}
+                          - ${horizon_days}
+                result: submit_job_resp
+
+            - wait_for_job:
+                call: wait_for_job_completion
+                args:
+                  dataproc_base: ${dataproc_base}
+                  job_id: ${submit_job_resp.body.reference.jobId}
+                result: final_job_state
+
+            - check_job_state:
+                switch:
+                  - condition: ${final_job_state != "DONE"}
+                    raise: '${"Dataproc job finished in non-terminal-success state: " + final_job_state}'
+        except:
+          as: job_error
+          steps:
+            - log_job_failure:
+                call: sys.log
+                args:
+                  severity: "ERROR"
+                  text: '${"Nightly ETL run failed for " + process_date + ": " + json.encode_to_string(job_error)}'
+            - remember_failure:
+                assign:
+                  - job_failed: true
+                  - failure_details: ${job_error}
+
+    # Runs even if cluster creation or the job itself failed above, so a
+    # half-created or errored cluster never lingers. Only skipped if no
+    # zone's create_cluster call ever succeeded (cluster_created stays
+    # false), since then there is nothing to delete.
+    - delete_cluster:
+        switch:
+          - condition: ${cluster_created}
+            steps:
+              - try_delete_cluster:
+                  try:
+                    steps:
+                      - delete_cluster_call:
+                          call: http.delete
+                          args:
+                            url: ${dataproc_base + "/clusters/" + active_cluster_name}
+                            auth:
+                              type: OAuth2
+                          result: delete_cluster_resp
+                      - wait_for_cluster_delete:
+                          call: wait_for_operation
+                          args:
+                            operation_name: ${delete_cluster_resp.body.name}
+                  except:
+                    as: delete_error
+                    steps:
+                      - log_delete_failure:
+                          call: sys.log
+                          args:
+                            severity: "ERROR"
+                            text: '${"Failed to delete cluster " + active_cluster_name + " - MAY STILL BE RUNNING, check manually: " + json.encode_to_string(delete_error)}'
+
+    - validate_row_count:
+        try:
+          steps:
+            - run_validation_query:
+                call: http.post
+                args:
+                  url: ${"https://bigquery.googleapis.com/bigquery/v2/projects/" + project_id + "/queries"}
+                  auth:
+                    type: OAuth2
+                  body:
+                    useLegacySql: false
+                    query: ${"SELECT COUNT(*) AS row_count FROM `" + project_id + "." + bq_dataset + ".daily_sales` WHERE date = '" + process_date + "'"}
+                result: validation_resp
+            - log_validation:
+                call: sys.log
+                args:
+                  severity: "INFO"
+                  text: '${"daily_sales row count for " + process_date + ": " + validation_resp.body.rows[0].f[0].v}'
+        except:
+          as: validation_error
+          steps:
+            - log_validation_error:
+                call: sys.log
+                args:
+                  severity: "WARNING"
+                  text: '${"Validation query failed (non-fatal): " + json.encode_to_string(validation_error)}'
+
+    - reraise_if_failed:
+        switch:
+          - condition: ${job_failed}
+            raise: ${failure_details}
+
+    - done:
+        return: ${"Completed nightly ETL for " + process_date + " (cluster " + active_cluster_name + " deleted)"}
+
+# Tries each zone in `zones`, in order, until one successfully creates AND
+# finishes provisioning a single-node cluster. Each attempt uses a unique
+# cluster name (cluster_name_base + "-z" + index) so a failed attempt's
+# name never collides with the next zone's attempt; a failed attempt is
+# best-effort cleaned up before moving on, since an async operation
+# failure (e.g. a zonal capacity error) can still leave a real cluster
+# resource behind in ERROR state. Returns the cluster name that succeeded;
+# raises the last zone's error if every zone fails.
+create_cluster_multizone:
+  params: [dataproc_base, cluster_name_base, etl_service_account, zones]
+  steps:
+    - init_idx:
+        assign:
+          - idx: 0
+          - last_zone_error: {}
+    - attempt:
+        switch:
+          - condition: ${idx >= len(zones)}
+            next: all_zones_failed
+    - compute_attempt_name:
+        assign:
+          - attempt_cluster_name: ${cluster_name_base + "-z" + string(idx)}
+    - try_zone:
+        try:
+          steps:
+            - log_zone_attempt:
+                call: sys.log
+                args:
+                  severity: "INFO"
+                  text: '${"Attempting cluster " + attempt_cluster_name + " in zone " + zones[idx]}'
+            - do_create:
+                call: http.post
+                args:
+                  url: ${dataproc_base + "/clusters"}
+                  auth:
+                    type: OAuth2
+                  body:
+                    clusterName: ${attempt_cluster_name}
+                    config:
+                      gceClusterConfig:
+                        zoneUri: ${zones[idx]}
+                        serviceAccount: ${etl_service_account}
+                      masterConfig:
+                        numInstances: 1
+                        machineTypeUri: "e2-standard-2"
+                        diskConfig:
+                          bootDiskType: "pd-balanced"
+                          bootDiskSizeGb: 100
+                      softwareConfig:
+                        imageVersion: "2.2-debian12"
+                      workerConfig:
+                        numInstances: 0
+                        machineTypeUri: "e2-standard-2"
+                        diskConfig:
+                          bootDiskType: "pd-balanced"
+                          bootDiskSizeGb: 50
+
+                result: create_resp
+            - do_wait:
+                call: wait_for_operation
+                args:
+                  operation_name: ${create_resp.body.name}
+            - log_zone_success:
+                call: sys.log
+                args:
+                  severity: "INFO"
+                  text: '${"Cluster " + attempt_cluster_name + " up in zone " + zones[idx]}'
+            - return_success:
+                return: ${attempt_cluster_name}
+        except:
+          as: zone_error
+          steps:
+            - log_zone_failure:
+                call: sys.log
+                args:
+                  severity: "WARNING"
+                  text: '${"Zone " + zones[idx] + " failed for " + attempt_cluster_name + ": " + json.encode_to_string(zone_error)}'
+            - cleanup_partial_cluster:
+                try:
+                  steps:
+                    - delete_partial:
+                        call: http.delete
+                        args:
+                          url: ${dataproc_base + "/clusters/" + attempt_cluster_name}
+                          auth:
+                            type: OAuth2
+                except:
+                  as: cleanup_error
+                  steps:
+                    - log_cleanup_failure:
+                        call: sys.log
+                        args:
+                          severity: "WARNING"
+                          text: '${"No cleanup needed or cleanup failed for " + attempt_cluster_name + " (likely never created): " + json.encode_to_string(cleanup_error)}'
+            - remember_zone_error:
+                assign:
+                  - last_zone_error: ${zone_error}
+                  - idx: ${idx + 1}
+            - retry_next_zone:
+                next: attempt
+    - all_zones_failed:
+        raise: ${last_zone_error}
+
+# Polls a Dataproc long-running Operation (returned by cluster create/delete)
+# resource name (e.g. "projects/P/regions/R/operations/O") until it
+# reports done, raising if it finished with an error.
+wait_for_operation:
+  params: [operation_name]
+  steps:
+    - poll:
+        call: http.get
+        args:
+          url: ${"https://dataproc.googleapis.com/v1/" + operation_name}
+          auth:
+            type: OAuth2
+        result: op_resp
+    - check_done:
+        switch:
+          - condition: ${"done" in op_resp.body AND op_resp.body.done}
+            next: finish
+    - sleep_and_retry:
+        call: sys.sleep
+        args:
+          seconds: 15
+    - loop_back:
+        next: poll
+    - finish:
+        switch:
+          - condition: ${"error" in op_resp.body}
+            raise: ${op_resp.body.error}
+        next: end_wait
+    - end_wait:
+        return: ${op_resp.body}
+
+# Polls a submitted Dataproc job's status until it reaches a terminal
+# state (DONE, ERROR, or CANCELLED), returning that state.
+wait_for_job_completion:
+  params: [dataproc_base, job_id]
+  steps:
+    - poll_job:
+        call: http.get
+        args:
+          url: ${dataproc_base + "/jobs/" + job_id}
+          auth:
+            type: OAuth2
+        result: job_resp
+    - check_terminal:
+        switch:
+          - condition: ${job_resp.body.status.state in ["DONE", "ERROR", "CANCELLED"]}
+            next: return_state
+    - sleep_and_retry_job:
+        call: sys.sleep
+        args:
+          seconds: 20
+    - loop_back_job:
+        next: poll_job
+    - return_state:
+        return: ${job_resp.body.status.state}

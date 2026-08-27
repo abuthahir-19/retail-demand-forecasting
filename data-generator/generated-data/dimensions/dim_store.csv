@@ -1,0 +1,16 @@
+store_id,store_name,region,city
+STORE_0000,Store 0000,North,City-2
+STORE_0001,Store 0001,South,City-7
+STORE_0002,Store 0002,North,City-38
+STORE_0003,Store 0003,South,City-15
+STORE_0004,Store 0004,South,City-35
+STORE_0005,Store 0005,East,City-1
+STORE_0006,Store 0006,West,City-22
+STORE_0007,Store 0007,East,City-7
+STORE_0008,Store 0008,North,City-30
+STORE_0009,Store 0009,West,City-6
+STORE_0010,Store 0010,Central,City-24
+STORE_0011,Store 0011,North,City-15
+STORE_0012,Store 0012,East,City-11
+STORE_0013,Store 0013,East,City-5
+STORE_0014,Store 0014,South,City-11

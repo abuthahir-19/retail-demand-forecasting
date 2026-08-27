@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.retailanalytics</groupId>
+  <artifactId>etl-spark-job</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+  <name>etl-spark-job</name>
+  <description>Nightly Spark ETL + demand forecasting job (runs on Dataproc)</description>
+
+  <properties>
+    <!-- Dataproc image 2.2's cluster JVM is Java 11, not 17 as its Spark
+         3.5/component versions might suggest - verified against a real
+         cluster (UnsupportedClassVersionError at release 17). No Java
+         15+ syntax is used in this module, so targeting 11 needs no
+         source changes. -->
+    <maven.compiler.release>11</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <spark.version>3.5.1</spark.version>
+    <scala.binary.version>2.12</scala.binary.version>
+    <google-cloud-libraries-bom.version>26.43.0</google-cloud-libraries-bom.version>
+  </properties>
+
+  <!--
+    Dataproc image version 2.2 ships Spark 3.5.x + Java 11 on the cluster
+    classpath, so spark-* is "provided" here rather than bundled. The
+    spark-bigquery connector is likewise NOT a maven dependency: it's
+    supplied at job-submit time via the "jars" flag pointing at the public
+    gs://spark-lib/bigquery/... artifact, since Spark's DataSource API is
+    accessed purely through format("bigquery") string configuration with
+    no compile-time classes needed.
+  -->
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.google.cloud</groupId>
+        <artifactId>libraries-bom</artifactId>
+        <version>${google-cloud-libraries-bom.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-core_${scala.binary.version}</artifactId>
+      <version>${spark.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-sql_${scala.binary.version}</artifactId>
+      <version>${spark.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-mllib_${scala.binary.version}</artifactId>
+      <version>${spark.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- Dataproc clusters have the GCS connector pre-installed; this is
+         provided-scope purely so "mvn exec:java" can read gs:// paths for
+         local development runs against real GCS. -->
+    <dependency>
+      <groupId>com.google.cloud.bigdataoss</groupId>
+      <artifactId>gcs-connector</artifactId>
+      <version>hadoop3-2.2.21</version>
+      <classifier>shaded</classifier>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- Bundled into the shaded jar: used for the idempotent
+         delete-by-partition DML before each day's write, since that's not
+         expressible through the Spark DataSource write API. -->
+    <dependency>
+      <groupId>com.google.cloud</groupId>
+      <artifactId>google-cloud-bigquery</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.10.3</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.5.1</version>
+        <configuration>
+          <!-- The spark-bigquery connector (added via the "jars" submit
+               flag, on Dataproc too) bundles its own Guava/gRPC/protobuf,
+               which collide with the same libraries transitively pulled in
+               by our own google-cloud-bigquery dependency. Relocating ours
+               avoids classpath-order-dependent NoSuchMethodError/version
+               conflicts regardless of which jar the JVM resolves first. -->
+          <relocations>
+            <relocation>
+              <pattern>com.google.common</pattern>
+              <shadedPattern>com.retailanalytics.shaded.com.google.common</shadedPattern>
+            </relocation>
+            <relocation>
+              <pattern>com.google.protobuf</pattern>
+              <shadedPattern>com.retailanalytics.shaded.com.google.protobuf</shadedPattern>
+            </relocation>
+            <relocation>
+              <pattern>io.grpc</pattern>
+              <shadedPattern>com.retailanalytics.shaded.io.grpc</shadedPattern>
+            </relocation>
+            <relocation>
+              <pattern>com.google.gson</pattern>
+              <shadedPattern>com.retailanalytics.shaded.com.google.gson</shadedPattern>
+            </relocation>
+          </relocations>
+          <filters>
+            <filter>
+              <artifact>*:*</artifact>
+              <excludes>
+                <exclude>META-INF/*.SF</exclude>
+                <exclude>META-INF/*.DSA</exclude>
+                <exclude>META-INF/*.RSA</exclude>
+              </excludes>
+            </filter>
+          </filters>
+        </configuration>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.3.0</version>
+        <configuration>
+          <mainClass>com.retailanalytics.etl.EtlForecastJob</mainClass>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>

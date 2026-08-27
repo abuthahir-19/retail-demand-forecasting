@@ -1,0 +1,19 @@
+server:
+  port: ${PORT:8080}
+
+spring:
+  application:
+    name: ingestion-api
+
+retail:
+  gcp:
+    project-id: ${GCP_PROJECT_ID:gcp-learning-acnt}
+    landing-bucket: ${LANDING_BUCKET:retail-analytics-landing-gcp-learning-acnt}
+    pubsub-topic: ${PUBSUB_TOPIC:pos-transactions}
+    bigquery-dataset: ${BIGQUERY_DATASET:retail_analytics}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
