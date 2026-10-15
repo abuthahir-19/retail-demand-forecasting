@@ -47,7 +47,7 @@ At the highest level, there are three moving parts:
 
 In more technical terms, every sale flows through a pipeline that looks like this:
 
-![Retail Sales Analytics & Demand Forecasting Platform — architecture diagram](images/retail-sales-forecasting.png)
+![Retail Sales Analytics & Demand Forecasting Platform — architecture diagram](images/retail_sales_analytics.png)
 
 Reading the diagram left to right:
 
